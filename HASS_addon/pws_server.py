@@ -22,7 +22,7 @@ MQTT_CLIENT_ID    = "weatherstation"
 MQTT_TOPIC_PREFIX = "homeassistant"
 MQTT_TOPIC = MQTT_TOPIC_PREFIX + "/weatherstation"
 
-def publish_discovery(client, sensor_name, unit, device_class, value_template="{{value}}"):
+def publish_discovery(client, sensor_name, unit, device_class, has_individual_availability=True, value_template="{{value}}"):
     config = {
         "name": f"Weather Station {sensor_name}",
         "state_topic": f"{MQTT_TOPIC}/{sensor_name}",
@@ -44,12 +44,31 @@ def publish_discovery(client, sensor_name, unit, device_class, value_template="{
     if device_class == "timestamp":
         config["entity_category"] = "diagnostic"
         
+    if has_individual_availability:
+        config["availability"] = [
+            {
+                "topic": f"{MQTT_TOPIC_PREFIX}/status",
+                "payload_available": "Online",
+                "payload_not_available": "Offline"
+            },
+            {
+                "topic": f"{MQTT_TOPIC}/{sensor_name}/availability",
+                "payload_available": "online",
+                "payload_not_available": "offline"
+            }
+        ]
+        config["availability_mode"] = "all"
+    else:
+        config["availability_topic"] = f"{MQTT_TOPIC_PREFIX}/status"
+        config["payload_available"] = "Online"
+        config["payload_not_available"] = "Offline"
+        
     discovery_topic = f"{MQTT_TOPIC_PREFIX}/sensor/weather_station/{sensor_name}/config"
     client.publish(discovery_topic, json.dumps(config), retain=True)
 
 def setup_discovery(client):
     # Add timestamp sensor discovery
-    publish_discovery(client, "last_update", None, "timestamp")
+    publish_discovery(client, "last_update", None, "timestamp", has_individual_availability=False)
     
     # Temperature sensors
     publish_discovery(client, "temperature_out", "°C", "temperature")
@@ -74,17 +93,19 @@ def on_connect(client, userdata, flags, rc):
     status = "✅ Connected" if rc == 0 else f"❌ Connection failed (code {rc})"
     print(f"{status} to MQTT broker at {MQTT_BROKER_HOST}")
     if rc == 0:
+        # Publish Online status for the service itself
+        client.publish(MQTT_TOPIC_PREFIX+"/status", payload="Online", qos=1, retain=True)
         setup_discovery(client)
 
 def on_disconnect(client, userdata, flags, rc):
     print("❌ Disconnected from MQTT broker")
 
-def publish(client, topic, msg):
+def publish(client, topic, msg, retain=False):
     if not client.is_connected():
         print("❌ Client not connected - cannot publish data")
         return
         
-    result = client.publish(topic, msg)
+    result = client.publish(topic, msg, retain=retain)
     if result[0] == 0:
         print(f"✅ {topic}: {msg}")
     else:
@@ -106,62 +127,107 @@ client.loop_start()
 class MyHttpRequestHandler(http.server.SimpleHTTPRequestHandler):
     def parse_wu_data(query_components):
         data_array = {}
+        
+        def get_valid_val(key):
+            if key in query_components:
+                val = query_components[key][0]
+                if val == '-9999' or val == '-9999.0':
+                    return None
+                return val
+            return None
+
+        # tempf
+        val = get_valid_val('tempf')
         if 'tempf' in query_components:
-            temp_out = round((float(query_components["tempf"][0])-32) * 5/9,1)
-            data_array['Temperature_out_[C]'] = temp_out
+            data_array['Temperature_out_[C]'] = round((float(val)-32) * 5/9,1) if val is not None else None
+            
+        # humidity
+        val = get_valid_val('humidity')
         if 'humidity' in query_components:
-            humidity_out = int(query_components["humidity"][0])
-            data_array['Humidity_out_[%]'] = humidity_out
+            data_array['Humidity_out_[%]'] = int(val) if val is not None else None
+            
+        # dewptf
+        val = get_valid_val('dewptf')
         if 'dewptf' in query_components:
-            dew_point = round((float(query_components["dewptf"][0])-32) * 5/9,1)
-            data_array['Dew_point_[C]'] = dew_point
+            data_array['Dew_point_[C]'] = round((float(val)-32) * 5/9,1) if val is not None else None
+            
+        # windchillf
+        val = get_valid_val('windchillf')
         if 'windchillf' in query_components:
-            wind_chill = round((float(query_components["windchillf"][0])-32) * 5/9,1)
-            data_array['Wind_chill_[C]'] = wind_chill
+            data_array['Wind_chill_[C]'] = round((float(val)-32) * 5/9,1) if val is not None else None
+            
+        # absbaromin
+        val = get_valid_val('absbaromin')
         if 'absbaromin' in query_components:
-            abs_barometric_pressure = round((float(query_components["absbaromin"][0])*33.86389),1)
-            data_array['Abs_Barometric_pressure_[hpa]'] = abs_barometric_pressure
+            data_array['Abs_Barometric_pressure_[hpa]'] = round((float(val)*33.86389),1) if val is not None else None
+            
+        # baromin
+        val = get_valid_val('baromin')
         if 'baromin' in query_components:
-            barometric_pressure = round((float(query_components["baromin"][0])*33.86389),2)
-            data_array['Barometric_pressure_[hpa]'] = barometric_pressure
+            data_array['Barometric_pressure_[hpa]'] = round((float(val)*33.86389),2) if val is not None else None
+            
+        # windspeedmph
+        val = get_valid_val('windspeedmph')
         if 'windspeedmph' in query_components:
-            wind_speed = round((float(query_components["windspeedmph"][0])*0.44704),2)
-            data_array['Wind_speed_[m/s]'] = wind_speed
+            data_array['Wind_speed_[m/s]'] = round((float(val)*0.44704),2) if val is not None else None
+            
+        # windgustmph
+        val = get_valid_val('windgustmph')
         if 'windgustmph' in query_components:
-            wind_gust_speed = round((float(query_components["windgustmph"][0])*0.44704),2)
-            data_array['Wind_gust_speed_[m/s]'] = wind_gust_speed
+            data_array['Wind_gust_speed_[m/s]'] = round((float(val)*0.44704),2) if val is not None else None
+            
+        # winddir
+        val = get_valid_val('winddir')
         if 'winddir' in query_components:
-            wind_dir = int(query_components["winddir"][0])
-            data_array['Wind_direction_[degree]'] = wind_dir
+            data_array['Wind_direction_[degree]'] = int(val) if val is not None else None
+            
+        # rainin
+        val = get_valid_val('rainin')
         if 'rainin' in query_components:
-            rain_rate_in = round((float(query_components["rainin"][0])*25.4),2)
-            data_array['Rain_rate_[mm/h]'] = rain_rate_in
+            data_array['Rain_rate_[mm/h]'] = round((float(val)*25.4),2) if val is not None else None
+            
+        # dailyrainin
+        val = get_valid_val('dailyrainin')
         if 'dailyrainin' in query_components:
-            rain_daily_in = round((float(query_components["dailyrainin"][0])*25.4),2)
-            data_array['Rain_daily_[mm/d]'] = rain_daily_in
+            data_array['Rain_daily_[mm/d]'] = round((float(val)*25.4),2) if val is not None else None
+            
+        # weeklyrainin
+        val = get_valid_val('weeklyrainin')
         if 'weeklyrainin' in query_components:
-            rain_weekly_in = round((float(query_components["weeklyrainin"][0])*25.4),2)
-            data_array['Rain_weekly_[mm/w]'] = rain_weekly_in
+            data_array['Rain_weekly_[mm/w]'] = round((float(val)*25.4),2) if val is not None else None
+            
+        # monthlyrainin
+        val = get_valid_val('monthlyrainin')
         if 'monthlyrainin' in query_components:
-            rain_monthly_in = round((float(query_components["monthlyrainin"][0])*25.4),2)
-            data_array['Rain_monthly_[mm/m]'] = rain_monthly_in
+            data_array['Rain_monthly_[mm/m]'] = round((float(val)*25.4),2) if val is not None else None
+            
+        # solarradiation
+        val = get_valid_val('solarradiation')
         if 'solarradiation' in query_components:
-            solar_radiation = float(query_components["solarradiation"][0])
-            data_array['Solar_radiation_[W/m^2]'] = solar_radiation
+            data_array['Solar_radiation_[W/m^2]'] = float(val) if val is not None else None
+            
+        # UV
+        val = get_valid_val('UV')
         if 'UV' in query_components:
-            uv_index = float(query_components["UV"][0])
-            data_array['UV_[index]'] = uv_index
+            data_array['UV_[index]'] = float(val) if val is not None else None
+            
+        # indoortempf
+        val = get_valid_val('indoortempf')
         if 'indoortempf' in query_components:
-            temp_in = round((float(query_components["indoortempf"][0])-32) * 5/9,1)
-            data_array['Temperature_in_[C]'] = temp_in
+            data_array['Temperature_in_[C]'] = round((float(val)-32) * 5/9,1) if val is not None else None
+            
+        # indoorhumidity
+        val = get_valid_val('indoorhumidity')
         if 'indoorhumidity' in query_components:
-            humidity_in = int(query_components["indoorhumidity"][0])
-            data_array['Humidity_in_[%]'] = humidity_in
+            data_array['Humidity_in_[%]'] = int(val) if val is not None else None
+            
+        # lowbatt
+        val = get_valid_val('lowbatt')
         if 'lowbatt' in query_components:
-            low_battery = int(query_components["lowbatt"][0])
-            data_array['Low_battery_[]'] = 100 if low_battery == 0 else 0
+            data_array['Low_battery_[]'] = (100 if int(val) == 0 else 0) if val is not None else None
         else:
             data_array['Low_battery_[]'] = 100
+            
         return data_array
 
     def do_GET(self):
@@ -202,7 +268,14 @@ class MyHttpRequestHandler(http.server.SimpleHTTPRequestHandler):
 
         for data_key, topic_suffix in data_mapping.items():
             if data_key in parsed_data:
-                publish(client, f"{MQTT_TOPIC}/{topic_suffix}", parsed_data[data_key])
+                val = parsed_data[data_key]
+                if val is None:
+                    # Publish offline to sensor availability
+                    publish(client, f"{MQTT_TOPIC}/{topic_suffix}/availability", "offline", retain=True)
+                else:
+                    # Publish online to sensor availability AND the value to state topic
+                    publish(client, f"{MQTT_TOPIC}/{topic_suffix}/availability", "online", retain=True)
+                    publish(client, f"{MQTT_TOPIC}/{topic_suffix}", val)
 
         self.wfile.write(bytes(html, "utf8"))
         return
