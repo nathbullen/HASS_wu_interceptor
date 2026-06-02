@@ -1,7 +1,7 @@
 ARG BUILD_FROM=ghcr.io/home-assistant/base:latest
 FROM $BUILD_FROM
 
-ENV LANG C.UTF-8
+ENV LANG=C.UTF-8
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -11,7 +11,7 @@ RUN \
          python3 \
              py3-pip \
      \
-     && pip3 install paho-mqtt
+     && pip3 install --break-system-packages paho-mqtt
 
 # Copy root filesystem
 
