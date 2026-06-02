@@ -231,18 +231,21 @@ class MyHttpRequestHandler(http.server.SimpleHTTPRequestHandler):
         return data_array
 
     def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/html")
-        self.end_headers()
-        
         query_components = parse_qs(urlparse(self.path).query)
         parsed_data = MyHttpRequestHandler.parse_wu_data(query_components)
         
         http_message = str(parsed_data).replace("'", '"')
         html = f"<html><head></head><body><h1>{http_message}</h1></body></html>"
+        response_bytes = bytes(html, "utf8")
+        
+        self.send_response(200)
+        self.send_header("Content-type", "text/html")
+        self.send_header("Content-Length", str(len(response_bytes)))
+        self.send_header("Connection", "close")
+        self.end_headers()
         
         # Send the response to the weather station immediately to prevent timeouts and retries
-        self.wfile.write(bytes(html, "utf8"))
+        self.wfile.write(response_bytes)
         self.wfile.flush()
         
         # Get current timestamp in ISO format with timezone
