@@ -241,6 +241,10 @@ class MyHttpRequestHandler(http.server.SimpleHTTPRequestHandler):
         http_message = str(parsed_data).replace("'", '"')
         html = f"<html><head></head><body><h1>{http_message}</h1></body></html>"
         
+        # Send the response to the weather station immediately to prevent timeouts and retries
+        self.wfile.write(bytes(html, "utf8"))
+        self.wfile.flush()
+        
         # Get current timestamp in ISO format with timezone
         current_time = datetime.now().astimezone().isoformat()
         publish(client, f"{MQTT_TOPIC}/last_update", current_time)
@@ -276,8 +280,6 @@ class MyHttpRequestHandler(http.server.SimpleHTTPRequestHandler):
                     # Publish online to sensor availability AND the value to state topic
                     publish(client, f"{MQTT_TOPIC}/{topic_suffix}/availability", "online", retain=True)
                     publish(client, f"{MQTT_TOPIC}/{topic_suffix}", val)
-
-        self.wfile.write(bytes(html, "utf8"))
         return
 
 handler_object = MyHttpRequestHandler
